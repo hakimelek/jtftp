@@ -156,7 +156,8 @@ class Client {
             if(opcodereceived==5){ // error
                  
                 System.out.println("ERROR: " +  new String(Arrays.copyOfRange(receiveBuff, 4 ,receiveBuff.length)));
-                 
+                done = true; 
+
             }
             else if(opcodereceived==3){ // data
             	if(!newfile.exists()){
@@ -164,7 +165,7 @@ class Client {
                 }
             	
                 int blockreceived = getInt(Arrays.copyOfRange(receiveBuff, 2, 4)); 
-                byte[] datareceived = Arrays.copyOfRange(receiveBuff, 4 ,receiveBuff.length+1);
+                byte[] datareceived = Arrays.copyOfRange(receiveBuff, 4, UDPPacket.getLength());
             	 
                 
             	if(block==blockreceived){
