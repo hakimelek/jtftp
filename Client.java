@@ -1,13 +1,9 @@
 import java.io.*; 
 import java.net.*; 
-import java.nio.ByteBuffer;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.Arrays;
-import java.util.Random;
 import java.util.Scanner;
- 
+import org.apache.commons.net.io.*;
+
 class Client {  
 	
 	static Client driver; 
@@ -26,7 +22,11 @@ class Client {
      
     private final static int DATA_SIZE = 512;
     private final static int TFTP_DEFAULT_PORT = 69;
-  
+    private final static int NUMBER_OF_TRIES = 10;
+    private final static int WAITTIME_TO_RETRY = 500;
+    private final static int TIME_TO_RECEIVE = 30000;
+    private final static int MAX_BLOCK_NUMBER = 65535;
+    
     private Scanner reader = new Scanner(System.in);
     
     static DatagramSocket clientSocket;
@@ -52,6 +52,7 @@ class Client {
                 System.out.println("select: [mode: netascii/octet]");
                 command = getCommand();
                 mode = command;
+                mode = mode.toUpperCase();
                 
                 command = "quit";
             }
@@ -65,98 +66,66 @@ class Client {
             System.out.print ("$ ");
             return reader.next();
         }
+        
+        public void transfer () throws IOException, InterruptedException{
+        	 clientSocket = new DatagramSocket();   
 
+             try {
+                 IPAddress = InetAddress.getByName(IPaddress);
+                 System.out.println(IPAddress);
+             } 
+             catch (UnknownHostException e) {
+                    System.out.println(IPaddress + " is not a valid IP");
+             }
+             
+             switch(request){
+               case "receive": sendRRQ(filename, mode); break;
+               case "send": sendWRQ(filename, mode); break;
+               default: { System.out.println("false request type, try again!"); driver.run();}
+             }
+             
+             clientSocket.close();
+        }
  
-     public static void main(String args[]) throws Exception{       
-         
-         
+     public static void main(String args[]) throws Exception{                     
          driver = new Client();
          driver.run();
-       /*          
-        // Get arguments  [send file.txt 192.168.1.2]
-        if (args.length > 0) {
-            try {
-                System.out.println("Usage: Java Client [send/receive] [filename] [IPaddress] [mode: netascii/octet]");
-                request = args[0]; //"send or receive"
-                filename = args[1]; //args[1]
-                IPaddress = args[2]; // lab IP 199.17.162.29
-                mode = args[3]; // Octet
-                 
-                mode = mode.toUpperCase(); 
+         driver.transfer();
+     } 
  
- 
-            } catch (Exception e) {
-                System.err.println("Arguments must be an specified.");
-                System.exit(1);
-            }
-        }
-             */
-         
-        // read or write 
-         
-        clientSocket = new DatagramSocket();   
-
-        try {
-            IPAddress = InetAddress.getByName(IPaddress);
-            System.out.println(IPAddress);
-        } 
-        catch (UnknownHostException e) {
-               System.out.println(IPaddress + " is not a valid IP");
-        }
-        
-        switch(request){
-          case "receive": sendRRQ(filename, mode); break;
-          case "send": sendWRQ(filename, mode); break;
-          default: { System.out.println("false request type, try again!"); driver.run();}
-        }
-        
-        clientSocket.close();  
-   
-    } 
- 
-     
 ////////////////////////////// RECEIVE  /////////////////////////////
 
-    public static void sendRRQ(String filename, String mode) throws IOException{    
-        System.out.println("init receiving "+filename+"...");
-         
-          
-    // Build read request  
-         byte[] requestbuff = getRequestPacket("read", filename, mode); 
-         
-    // send read request
-        try{
-             UDPPacket = new DatagramPacket(requestbuff, requestbuff.length, IPAddress, 69);
-             clientSocket.send(UDPPacket);    
-         }
-         catch(Exception e){
-             System.out.println("error sending request packet");
-         }
-         
-    // receive first data
-                 
+    public static void sendRRQ(String filename, String mode) throws IOException, InterruptedException{    
+        System.out.println("init receiving "+filename+"...");       
+        sendRequest("read", filename, mode);
+        
+    // receive first data             
         File newfile = new File(filename);          
         FileOutputStream receivedFileOctet = new FileOutputStream(newfile);
-         
+        FromNetASCIIOutputStream receivedFileNetascii = null;
+
         boolean done = false; 
         int block=1; 
-         
+        int times=0;
+        
+        clientSocket.setSoTimeout(TIME_TO_RECEIVE);
+        
         // loop through this 
         while(!done){
         	byte[] receiveBuff = new byte[DATA_SIZE+4]; 
         	
         	UDPPacket = new DatagramPacket(receiveBuff, receiveBuff.length, IPAddress, clientSocket.getLocalPort());  
-         
-            clientSocket.receive(UDPPacket);    
+        	clientSocket.receive(UDPPacket);    
                      
             TFPTport = UDPPacket.getPort(); 
             
             int opcodereceived =  getInt(Arrays.copyOfRange(receiveBuff, 0, 2));
 
             if(opcodereceived==5){ // error
-                 
+                
                 System.out.println("ERROR: " +  new String(Arrays.copyOfRange(receiveBuff, 4 ,receiveBuff.length)));
                 done = true; 
+            	clientSocket.close();
 
             }
             else if(opcodereceived==3){ // data
@@ -171,13 +140,30 @@ class Client {
             	if(block==blockreceived){
             		 if(UDPPacket.getLength()>=DATA_SIZE){ // file still transfering
                          System.out.println("block: "+ block);
-            			 receivedFileOctet.write(datareceived);
+                         if(mode=="OCTET"){
+                             receivedFileOctet.write(datareceived);
+                         }
+                         else if(mode.equals("NETASCII")){
+                        	 receivedFileNetascii = new FromNetASCIIOutputStream(receivedFileOctet);
+                        	 receivedFileNetascii.write(datareceived);
+
+                         }      
                          sendAck(block);
                      }
                      else { //file is done transfering
                          System.out.println("(last) block: "+ block);
-                    	 receivedFileOctet.write(datareceived);
-                         receivedFileOctet.close();
+
+                         if(mode.equals("OCTET")){
+                             receivedFileOctet.write(datareceived);
+                             receivedFileOctet.close();
+
+                         }
+                         else if(mode.equals("NETASCII")){
+                        	 receivedFileNetascii = new FromNetASCIIOutputStream(receivedFileOctet);
+                        	 receivedFileNetascii.write(datareceived);
+                             receivedFileNetascii.close();
+                         }
+                         
                          //send ack
                          sendAck(block);
                          done = true; 
@@ -185,65 +171,75 @@ class Client {
             		
             		 block++; 
             		 
-            		 if(block>65535){ // block is of size 16 bits
+            		 if(block>MAX_BLOCK_NUMBER){ // block is of size 16 bits
                  		block=0; // reinit if bigger that max size
                    	 }
             	}
+            	else if(block==blockreceived+1){
+            		if(times<NUMBER_OF_TRIES){
+                		Thread.sleep(WAITTIME_TO_RETRY);
+            			sendAck(block-1);
+            			times++;
+            		}
+            		else{
+            			sendError(4);
+                    	clientSocket.close();
+            		}
+            	}
             	else{
             		sendError(4); 
-            	}   
-                
-            }
-         
-           
+            	}  
+            	                
+            }    
         }
+        receivedFileOctet.close();
                   
     }
-     
-     
-     
+        
 ////////////////////////////// SEND  /////////////////////////////
      
     public static void sendWRQ(String filename, String mode) throws IOException, InterruptedException{
         System.out.println("init sending " + filename+"...");
  
-         byte[] filebytes = null;
-         Path path = null;
-          
+        File file = null;
+        
          try{
-             path = Paths.get(filename);
+            file = new File(filename);
          }
          catch(Exception e){
              e.printStackTrace();
          }
+        
+         byte[] filebytes = new byte[(int) file.length()];
+         byte[] filebytesnetascii = null;
          
-        try{
-            filebytes = Files.readAllBytes(path); 
+         FileInputStream outOctet = null;
+         outOctet = new FileInputStream(file);
+         
+         try{
+        	if(mode.equals("OCTET")){	
+            	outOctet.read(filebytes);         
+            }
+            else if(mode.equals("NETASCII")){
+            	ToNetASCIIInputStream outNetascii = new ToNetASCIIInputStream(outOctet);
+            	filebytesnetascii = new byte[outNetascii.available()]; 
+            	outNetascii.read(filebytesnetascii); 
+            }
+
             System.out.println("File size ="+filebytes.length);
         }
         catch(Exception e){
             e.printStackTrace();
         }         
          
-
-    // Build write request  
-         byte[] requestbuff = getRequestPacket("write", filename, mode); 
-         
-    // send write request
-        try{
-        	UDPPacket = new DatagramPacket(requestbuff, requestbuff.length, IPAddress, TFTP_DEFAULT_PORT);
-             clientSocket.send(UDPPacket);    
-         }
-         catch(Exception e){
-             System.out.println("error sending request packet " + e);
-         }
+        sendRequest("write", filename, mode);
          
     // receive ack
         byte[] receiveBuff = new byte[4]; // max size 4 = opcode + block# 
  
         try{
-        UDPPacket = new DatagramPacket(receiveBuff, receiveBuff.length, IPAddress, clientSocket.getLocalPort());         
-        clientSocket.receive(UDPPacket);   
+          UDPPacket = new DatagramPacket(receiveBuff, receiveBuff.length, IPAddress, clientSocket.getLocalPort());         
+          clientSocket.receive(UDPPacket);   
         }
         catch(Exception e){
             System.out.println("error receiving first ack packet with block# 0");
@@ -260,22 +256,22 @@ class Client {
         	Thread.sleep(5000);
         	// send request again
             System.out.println("ERROR: " +  new String(Arrays.copyOfRange(receiveBuff, 4 ,receiveBuff.length)));
-
-        	try{
-            	UDPPacket = new DatagramPacket(requestbuff, requestbuff.length, IPAddress, TFTP_DEFAULT_PORT);
-                 clientSocket.send(UDPPacket);    
-             }
-             catch(Exception e){
-                 System.out.println("error sending request packet again");
-             }
+            System.out.println("RETRY SENDING REQUEST");
+            sendRequest("write", filename, mode);
         }
         else if(opcodereceived==4){  // ack
             int blockreceived = getInt(Arrays.copyOfRange(receiveBuff, 2, 4)); 
             if(blockreceived==block){
-            	sendFile(filebytes, clientSocket, UDPPacket);
+            	if(mode.equals("OCTET")){
+                	sendFile(filebytes, clientSocket, UDPPacket);                    
+                }
+                else if(mode.equals("NETASCII")){
+                	sendFile(filebytesnetascii, clientSocket, UDPPacket);
+                }
             }
             else{
             	sendError(4);
+            	clientSocket.close();
             }
         }      
     }
@@ -371,7 +367,7 @@ class Client {
     	 byte[] ackbuff = getAckPacket(block); 
     	 
          try{
-         	UDPPacket = new DatagramPacket(ackbuff, ackbuff.length, IPAddress, TFPTport);
+              UDPPacket = new DatagramPacket(ackbuff, ackbuff.length, IPAddress, TFPTport);
               clientSocket.send(UDPPacket);    
           }
           catch(Exception e){
@@ -392,8 +388,23 @@ class Client {
           }
     }
     
+    //send Request
+    public static void sendRequest(String requestType, String filename, String mode) throws IOException{
+    	// Build write request  
+        byte[] requestbuff = getRequestPacket(requestType, filename, mode); 
+        
+        // send write request
+       try{
+         	UDPPacket = new DatagramPacket(requestbuff, requestbuff.length, IPAddress, TFTP_DEFAULT_PORT);
+            clientSocket.send(UDPPacket);    
+        }
+        catch(Exception e){
+            System.out.println("error sending request packet " + e);
+        }
+    }
+    
     //send File
-    public static void sendFile(byte[] file, DatagramSocket clientSocket, DatagramPacket UDPPacket) throws IOException{
+    public static void sendFile(byte[] file, DatagramSocket clientSocket, DatagramPacket UDPPacket) throws IOException, InterruptedException{
           	    int block=0; 
                 // start sending data 
                 boolean done = false; 
@@ -421,6 +432,7 @@ class Client {
 
                     byte[] dataPacket = getDataPacket(block, chunck); 
                     
+                    // Send at first
                     try{
                     	UDPPacket = new DatagramPacket(dataPacket, dataPacket.length, IPAddress, TFPTport);
                         clientSocket.send(UDPPacket);   
@@ -428,7 +440,8 @@ class Client {
                      catch(Exception e){
                          System.out.println("error sending data packet");
                     }
-                     
+                    
+                    // Receiving ack 
                     byte[] ackPacket = new byte[4];
                       
                     try{
@@ -440,11 +453,12 @@ class Client {
                     }  
                     
                     int opcodereceived =  getInt(Arrays.copyOfRange(ackPacket, 0, 2));
+                    int times=0; 
                     
                     if(opcodereceived==5){ // error
                     	System.out.println("ERROR: " +  new String(Arrays.copyOfRange(ackPacket, 4 ,ackPacket.length)));
 
-                    	try{
+                    	 try{
                         	UDPPacket = new DatagramPacket(dataPacket, dataPacket.length, IPAddress, TFPTport);
                             clientSocket.send(UDPPacket);    
                          }
@@ -452,17 +466,34 @@ class Client {
                              System.out.println("error sending data packet again");
                          }
                     }
-                    else{ // ack
+                    else if(opcodereceived==4){ // ack
                         int blockreceived = getInt(Arrays.copyOfRange(ackPacket, 2, 4)); 
-                        if(block!=blockreceived){
-                        	sendError(4);
-                        }
+                       
+                        if(blockreceived==65535){ // block is of size 16 bits
+                        	blockreceived=-1; // reinit if bigger that max size
+                    	}
+                        // if block==blockreceive, good keep going to the next iteration
+                        // if blockreceive is the previous block, send the packet again
+                        if(block==blockreceived+1 && times<NUMBER_OF_TRIES){ // send data packet again if get previous ack
+                        	try{
+                            	UDPPacket = new DatagramPacket(dataPacket, dataPacket.length, IPAddress, TFPTport);
+                                clientSocket.send(UDPPacket);   
+                                times++;
+                             }
+                             catch(Exception e){
+                                 System.out.println("error sending data packet again");
+                             }      	
+                        }                        
                     }
-                    
-                      
+                    else{
+                    	sendError(4); 
+                    	clientSocket.close();
+                    	System.out.println("Try again?");
+                    	driver.run();
+                    	driver.transfer();
+                    }
+      
                     counter += DATA_SIZE; 
                 }
-                 
      }   
- 
 }
