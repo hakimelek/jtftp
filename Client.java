@@ -115,8 +115,8 @@ class Client {
         	byte[] receiveBuff = new byte[DATA_SIZE+4]; 
         	
         	UDPPacket = new DatagramPacket(receiveBuff, receiveBuff.length, IPAddress, clientSocket.getLocalPort());  
-        	clientSocket.receive(UDPPacket);    
-                     
+            clientSocket.receive(UDPPacket);   
+         
             TFPTport = UDPPacket.getPort(); 
             
             int opcodereceived =  getInt(Arrays.copyOfRange(receiveBuff, 0, 2));
@@ -140,7 +140,7 @@ class Client {
             	if(block==blockreceived){
             		 if(UDPPacket.getLength()>=DATA_SIZE){ // file still transfering
                          System.out.println("block: "+ block);
-                         if(mode=="OCTET"){
+                         if(mode.equals("OCTET")){
                              receivedFileOctet.write(datareceived);
                          }
                          else if(mode.equals("NETASCII")){
